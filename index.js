@@ -38,6 +38,28 @@ const verifyToken = (req, res, next) => {
   });
 };
 
+function calculateProfileProgress(profile) {
+  let progress = 0;
+
+  if (profile.headline) progress += 10;
+  if (profile.bio) progress += 10;
+  if (profile.location) progress += 10;
+  if (profile.skills?.length > 0) progress += 10;
+  if (profile.experience?.length > 0) progress += 10;
+  if (profile.education?.length > 0) progress += 10;
+  if (profile.jobPreferences?.jobTypes?.length > 0) progress += 10;
+  if (profile.jobPreferences?.locations?.length > 0) progress += 10;
+  if (
+    profile.jobPreferences?.salary?.min &&
+    profile.jobPreferences?.salary?.max
+  )
+    progress += 10;
+  if (profile.careerInfo?.length > 0) progress += 5;
+  if (profile.projects?.length > 0) progress += 5;
+
+  return Math.min(progress, 100); // Ensure max 100
+}
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_KEY}@cluster0.pb8np.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 const client = new MongoClient(uri, {
@@ -77,11 +99,12 @@ async function run() {
       });
     });
 
+    // user api here
     app.post("/user", async (req, res) => {
       try {
-        const { displayName, email, photoUrl } = req.body;
+        const { displayName, email, dbPhoto } = req.body;
 
-        if (!email || !displayName) {
+        if (!email || !displayName || !dbPhoto) {
           return res
             .status(400)
             .send({ message: "Email and Display Name are required." });
@@ -97,7 +120,8 @@ async function run() {
         const newUser = {
           name: displayName,
           email,
-          avatar: photoUrl || "", // default to empty if not provided
+          dbPhoto: dbPhoto,
+          avatar: dbPhoto || "",
           profile: {
             headline: null,
             bio: null,
@@ -115,7 +139,16 @@ async function run() {
               remote: null,
             },
           },
+          applicationStats: {
+            applied: 0,
+            inProgress: 0,
+            interviews: 0,
+            offers: 0,
+            rejected: 0,
+          },
+          applications: [],
           role: "user",
+          progress: 10,
         };
 
         const result = await userCollection.insertOne(newUser);
@@ -144,6 +177,41 @@ async function run() {
       } catch (error) {
         console.error("Error fetching user:", error);
         res.status(500).json({ message: "Internal server error!" });
+      }
+    });
+
+    //update user profile
+    app.patch("/user/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const { profile } = req.body;
+      console.log("profile", profile);
+
+      if (!email || !profile) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Email or profile data missing." });
+      }
+
+      const progress = calculateProfileProgress(profile);
+      try {
+        const result = await userCollection.updateOne(
+          { email: email },
+          { $set: { profile: profile, progress: progress } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .json({ success: false, message: "User not found." });
+        }
+        const user = await userCollection.findOne({ email });
+
+        res.send({ success: true, message: "Profile updated", result, user });
+      } catch (error) {
+        console.error("Error updating user:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
       }
     });
 
